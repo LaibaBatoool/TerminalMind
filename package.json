@@ -7,7 +7,6 @@
     "termmind": "dist/cli.js"
   },
   "type": "commonjs",
-  "license": "MIT",
   "keywords": [
     "cli",
     "debugging",
