@@ -166,6 +166,4 @@ termmind/
 - `node-pty` for `record` if interactive prompts/colors ever need to survive the log faithfully
 - Local TTS (Piper) as an upgrade path from browser `speechSynthesis`, if voice quality matters for a live demo
 
-## License
 
-MIT
