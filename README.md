@@ -1,142 +1,171 @@
-# TerminalMind (Phase 1) — text-only debugging copilot
+# TerminalMind
 
-Watches your terminal output, correlates errors with your git diff, and asks
-an LLM (Groq — free tier) to diagnose what broke and how to fix it — grounded in your
-actual code, not generic Stack Overflow advice.
+A voice-narrated debugging copilot that watches your terminal, correlates errors with your git diff, and tells you out loud or in a dashboard what broke and how to fix it. Grounded in your actual code, not generic Stack Overflow advice.
 
-This is **Phase 1** from the design doc: no voice, no PTY wrapper yet. Just
-the core loop: record → ask → diagnose. Everything here is a drop-in
-foundation for Phase 2 (voice) and Phase 3 (RAG memory) later.
+```
+you: "why is this not working?"
+termmind: "currentUser is accessed before AuthContext finishes loading.
+           Add optional chaining: currentUser?.name || 'Loading...'
+           → src/context/AuthContext.tsx:19 (confidence: high)"
+```
 
-## How it works
+## Why this exists
 
-1. `termmind record <your dev command>` — runs your command exactly as
-   normal (you see all the output live), and *also* appends everything to
-   `.termmind/session.log` in the current project folder.
-2. When something breaks, in another terminal tab run
-   `termmind ask "why did this break?"`.
-3. TerminalMind reads the last N lines of the log, pulls your current git
-   diff and last commit's diff, sends it all to Groq, and prints a
-   structured diagnosis + suggested fix.
-4. Every diagnosis is appended to `.termmind/history.json` — this becomes
-   the RAG knowledge base in Phase 3.
+Debugging usually means: error appears → stop typing → alt-tab to a browser → search the error message → skim three tangentially-related Stack Overflow answers → alt-tab back → apply a guess. TerminalMind collapses that into: ask a question, get an answer grounded in the actual file and line that's broken, without leaving the terminal.
 
-## Setup (run once)
+## What it actually does
+
+- **Watches your terminal** in real time and keeps a rolling log of recent output
+- **Correlates errors with your git diff** — the diagnosis isn't generic, it's "here's what changed in your last commit that likely caused this"
+- **Answers by voice or text** — hold a button, ask out loud, get a spoken answer back, or just type `termmind ask "..."`
+- **Remembers what it's fixed before** — asks a question similar to one you resolved last week? It surfaces that old fix as grounding context
+- **Has a dashboard** — every diagnosis ever made for a project, searchable, with stats
+
+## Demo
+
+**Voice UI** — hold to talk, get a diagnosis, hear it spoken back:
+
+![Voice UI showing a diagnosis and suggested fix](docs/screenshots/voice-ui.png)
+
+**Dashboard** — every diagnosis ever made for a project, searchable:
+
+![Dashboard showing session stats and history](docs/screenshots/dashboard.png)
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  TAB 1: termmind record "npm run dev"                        │
+│  → runs your dev command normally, mirrors output to          │
+│    .termmind/session.log (rolling context buffer)             │
+└───────────────────────┬────────────────────────────────────┘
+                         │
+┌─────────────────────────────────────────────────────────────┐
+│  TAB 2: termmind ask "..."   OR   termmind serve (voice+web)  │
+│                                                                │
+│  contextAssembler ──► reads log tail + git diff + changed     │
+│                        files                                  │
+│  similarity      ──► TF-IDF search over .termmind/history.json│
+│                        for similar past resolved errors       │
+│  grokClient      ──► sends context + past fixes to Groq,       │
+│                        forces structured JSON diagnosis back   │
+│  whisperClient   ──► (voice path only) transcribes mic audio   │
+│                        via Groq's hosted Whisper                │
+└───────────────────────┬────────────────────────────────────┘
+                         │
+              .termmind/history.json (every diagnosis, ever)
+                         │
+┌─────────────────────────────────────────────────────────────┐
+│  dashboard/ (React + Tailwind, served at /dashboard)           │
+│  → fetches /api/history, renders searchable session timeline   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| CLI / backend | Node.js, TypeScript, Commander, Express |
+| LLM | Groq (Llama 3.3 70B) — free tier, no credit card |
+| Speech-to-text | Groq's hosted Whisper (large-v3-turbo) |
+| Text-to-speech | Browser-native `speechSynthesis` |
+| Similarity search | Hand-rolled TF-IDF cosine similarity, zero dependencies |
+| Dashboard | React 19, TypeScript, Tailwind CSS v4, Vite |
+| Git integration | `simple-git` |
+
+## Setup
 
 ```bash
+git clone https://github.com/LaibaBatoool/Termmind.git
 cd termmind
 npm install
 cp .env.example .env
 ```
 
-Open `.env` and paste in your Groq API key (get one free, no credit card, at https://console.groq.com/keys):
-
+Add a free Groq API key (no credit card) from https://console.groq.com/keys to `.env`:
 ```
-GROQ_API_KEY=your_real_key_here
+GROQ_API_KEY=your_key_here
 ```
 
-## Running it (every time you use it)
-
-You need **two terminal tabs** open in your project directory.
-
-**Tab 1 — start recording your dev server / test runner:**
+Build:
 ```bash
-npm run record -- "npm run dev"
+npm run build
+npm link          # makes `termmind` available globally on your machine
 ```
-(replace `"npm run dev"` with whatever command you're actually debugging —
-e.g. `"pytest"`, `"npm test"`, `"python app.py"`)
 
-**Tab 2 — whenever something breaks, ask about it:**
+Optional — build the dashboard too:
 ```bash
-npm run ask -- "why did this break?"
+cd dashboard
+npm install
+npm run build
 ```
-or any natural question:
+
+## Usage
+
+Run these from inside whichever project you want to debug — not from inside `termmind` itself.
+
+**Terminal A — record your dev server / test runner:**
 ```bash
-npm run ask -- "is this related to the change I made yesterday?"
+termmind record "npm run dev"
 ```
 
-**Anytime — see past diagnoses for this project:**
+**Terminal B — ask about errors, by text or voice:**
 ```bash
-npm run history
+termmind ask "why did this break?"
 ```
-
-**If auth errors look weird/inconsistent:**
-```bash
-termmind debug
-```
-Prints which `.env` file is loaded and a safe preview of the key (never the
-full key) — use this before assuming the API itself is broken.
-
-## About the free tier
-
-Groq's free tier needs no credit card and is rate-limited rather than
-credit-limited — roughly 30 requests/minute, ~1,000 requests/day depending
-on the model. That's more than enough for solo dev use. If you ever hit a
-`429` error, you've hit the rate limit — just wait a minute and retry.
-
-> Note the `--` before your argument — that's npm's syntax for "pass this
-> argument through to the underlying script" rather than to npm itself.
-
-## Phase 2 — voice UI (new)
-
-Instead of typing `termmind ask "..."`, you can now talk to it.
-
-**From inside the project you're debugging:**
+or
 ```bash
 termmind serve
 ```
-This opens `http://localhost:4756` in your browser automatically. Hold the
-mic button, ask your question, let go. It transcribes your voice (Groq's
-free hosted Whisper), diagnoses using the same pipeline as `ask`, and
-**speaks the answer back** using your browser's built-in text-to-speech.
+which opens a hold-to-talk voice UI at `localhost:4756`, and the dashboard at `localhost:4756/dashboard`.
 
-You still need `termmind record "npm run dev"` running in another tab first
-— `serve` reads context from the same `.termmind/session.log`, it just adds
-a voice front-end on top of the exact same diagnosis pipeline.
+**Anytime:**
+```bash
+termmind history     # text list of past diagnoses
+termmind debug        # verify which API key is actually loaded
+```
 
-Nothing here needed a native module or an offline model download — mic
-capture is the browser's `MediaRecorder` API, transcription is a hosted
-Groq call, and speech output is the browser's `speechSynthesis` API. This
-was a deliberate substitution for the `node-pty` + local `whisper.cpp` +
-global-hotkey design in the original doc, specifically to avoid Windows
-native-build pain (`node-gyp`/Visual Studio Build Tools) for a feature that
-doesn't need to be offline to be useful.
+## Design decisions (and why they're not what the original spec said)
 
-## Where things live (updated)
+This project started from a spec that called for `node-pty`, local `whisper.cpp`, a global hotkey listener, and MongoDB Atlas Vector Search. Several of those were deliberately swapped out during development, for reasons worth explaining rather than hiding:
 
-| File | Purpose |
-|---|---|
-| `src/cli.ts` | Entry point — wires up `record`, `ask`, `history`, `debug`, `serve` |
-| `src/contextAssembler.ts` | Reads log tail + computes git diffs (the "rolling context window" design) |
-| `src/grokClient.ts` | Calls the Groq chat API, enforces structured JSON output |
-| `src/whisperClient.ts` | Calls Groq's hosted Whisper endpoint for transcription |
-| `src/server.ts` | Express server powering the voice UI (`termmind serve`) |
-| `public/index.html` | Hold-to-talk mic UI — plain HTML/JS, no build step |
-| `src/config.ts` | Loads `.env`, resolves `.termmind/` paths |
-| `.termmind/session.log` | Rolling terminal output log (per-project, gitignored) |
-| `.termmind/history.json` | Every question + diagnosis, from both `ask` and `serve` (per-project, gitignored) |
+**`child_process.spawn` instead of `node-pty` for terminal capture.** A real PTY wrapper handles interactive prompts and ANSI colors more faithfully, but requires native compilation (`node-gyp`, Visual Studio Build Tools on Windows) for a first version that didn't need it. Plain spawn piping to a log file captures the same stdout/stderr data with far less setup risk. `record` is the only file that would need to change to upgrade this later.
 
-## Why the design is the way it is (for your interview notes)
+**Browser `MediaRecorder` + hosted Whisper instead of a global hotkey + local `whisper.cpp`.** True OS-level hotkeys and raw mic capture in Node both need native modules. A local web page sidesteps this entirely — the browser handles mic permissions and audio capture natively, and Groq (the same account already in use for diagnosis) also hosts Whisper for free, so there's no local model download or native binary either.
 
-- **Why not just wrap `node-pty` immediately?** `record` here uses plain
-  `child_process.spawn` piping to both your terminal and a log file. It's
-  functionally the same data (full stdout/stderr capture) with far less
-  complexity. Swapping in a real PTY wrapper later only touches `record` —
-  `ask`, `contextAssembler`, and `grokClient` don't change at all.
-- **Why not send the whole log file to the LLM?** Cost, latency, and token
-  limits. `contextAssembler.ts` only keeps the last `CONTEXT_LINES` (default
-  200) — this is the "rolling buffer" tradeoff called out in the design doc.
-  Phase 3 replaces "discard old lines" with "summarize/embed old lines."
-- **Why force JSON output from the model?** So the CLI (and later, a
-  dashboard) can reliably parse `relevantFile` / `relevantLine` instead of
-  regex-scraping free text.
+**Hand-rolled TF-IDF instead of MongoDB Atlas Vector Search.** Real embeddings would be more semantically precise, but MongoDB Atlas means a third external account. The first attempt at local embeddings (`@xenova/transformers`) was rejected after `npm audit` surfaced a **critical unpatched vulnerability** in a transitive dependency (`protobufjs`) — a real finding, not a hypothetical one. For a personal history file that stays in the hundreds of entries, brute-force TF-IDF cosine similarity is simpler, has zero dependencies, and is accurate enough — error messages and stack traces are keyword-dense, which is exactly what TF-IDF is good at.
 
-## Next steps (Phase 3+, not built yet)
+**Why the LLM is forced to return structured JSON.** So the CLI, voice UI, and dashboard can all reliably render `relevantFile`/`relevantLine`/`confidence` instead of regex-scraping free text — one contract, three consumers.
 
-- Embed `.termmind/history.json` entries into MongoDB Atlas Vector Search
-  so repeated errors surface "you fixed this 2 weeks ago by doing X" —
-  retrieve similar past fixes before diagnosing
-- Swap `record`'s plain spawn for `node-pty` if you ever need to capture
-  interactive prompts/colors more faithfully
-- Optional: upgrade TTS from browser `speechSynthesis` to Piper (local,
-  free, more natural-sounding) if voice quality matters for a demo
+**Why the rolling context window discards old lines instead of sending everything.** Cost, latency, and token limits. `contextAssembler.ts` keeps only the last `CONTEXT_LINES` (default 200) of terminal output — a deliberate lossy-compression tradeoff, not an oversight.
+
+## Project structure
+
+```
+termmind/
+├── src/
+│   ├── cli.ts              # entry point — record/ask/history/debug/serve
+│   ├── config.ts           # .env loading, .termmind/ path resolution
+│   ├── contextAssembler.ts # rolling log tail + git diff
+│   ├── similarity.ts       # TF-IDF cosine similarity (RAG retrieval)
+│   ├── historyStore.ts     # load/append .termmind/history.json
+│   ├── grokClient.ts       # Groq chat completion + structured diagnosis
+│   ├── whisperClient.ts    # Groq hosted Whisper transcription
+│   ├── server.ts           # Express server (voice UI + dashboard + API)
+│   └── types.ts
+├── public/
+│   └── index.html          # hold-to-talk voice UI (plain HTML/JS)
+├── dashboard/               # React + Tailwind session history dashboard
+│   └── src/App.tsx
+└── .env.example
+```
+
+## What's next
+
+- Real embeddings (with a vetted, non-vulnerable library) if TF-IDF's keyword matching starts missing semantically-similar-but-differently-worded errors
+- `node-pty` for `record` if interactive prompts/colors ever need to survive the log faithfully
+- Local TTS (Piper) as an upgrade path from browser `speechSynthesis`, if voice quality matters for a live demo
+
+## License
+
+MIT
