@@ -76,7 +76,7 @@ Debugging usually means: error appears → stop typing → alt-tab to a browser 
 ## Setup
 
 ```bash
-git clone https://github.com/LaibaBatoool/Termmind.git
+git clone https://github.com/LaibaBatoool/TerminalMind.git
 cd termmind
 npm install
 cp .env.example .env
