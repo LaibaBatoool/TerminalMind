@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>TerminalMind — Voice</title>
+  <style>
+    body {
+      font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+      background: #0f1115;
+      color: #e6e6e6;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 24px;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 20px;
+      color: #7dd3fc;
+      margin-bottom: 4px;
+    }
+
+    p.sub {
+      color: #888;
+      margin-top: 0;
+      font-size: 14px;
+    }
+
+    #mic-btn {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: #1e293b;
+      border: 3px solid #334155;
+      color: #e6e6e6;
+      font-size: 15px;
+      cursor: pointer;
+      margin: 32px 0;
+      transition: all 0.15s ease;
+    }
+
+    #mic-btn:active,
+    #mic-btn.recording {
+      background: #dc2626;
+      border-color: #ef4444;
+      transform: scale(1.05);
+    }
+
+    #status {
+      color: #888;
+      min-height: 20px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: #1a1d24;
+      border-radius: 10px;
+      padding: 20px;
+      width: 100%;
+      margin-bottom: 16px;
+      display: none;
+    }
+
+    .card.visible {
+      display: block;
+    }
+
+    .card h3 {
+      margin: 0 0 8px 0;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .card p {
+      margin: 0;
+      line-height: 1.5;
+    }
+
+    #question-card h3 {
+      color: #7dd3fc;
+    }
+
+    #diagnosis-card h3 {
+      color: #facc15;
+    }
+
+    #fix-card h3 {
+      color: #4ade80;
+    }
+
+    #meta {
+      color: #666;
+      font-size: 12px;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>TerminalMind</h1>
+  <p class="sub">Hold the button, ask what broke, let go.</p>
+
+  <button id="mic-btn">Hold to Talk</button>
+  <div id="status"></div>
+
+  <div class="card" id="question-card">
+    <h3>You asked</h3>
+    <p id="question-text"></p>
+  </div>
+  <div class="card" id="diagnosis-card">
+    <h3>Diagnosis</h3>
+    <p id="diagnosis-text"></p>
+  </div>
+  <div class="card" id="fix-card">
+    <h3>Suggested fix</h3>
+    <p id="fix-text"></p>
+    <div id="meta"></div>
+  </div>
+
+  <script>
+    const micBtn = document.getElementById('mic-btn');
+    const statusEl = document.getElementById('status');
+    let mediaRecorder = null;
+    let chunks = [];
+
+    function setStatus(text) { statusEl.textContent = text; }
+    function showCard(id, text) {
+      const card = document.getElementById(id);
+      card.classList.add('visible');
+      card.querySelector('p').textContent = text;
+    }
+    function speak(text) {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.rate = 1.05;
+      window.speechSynthesis.speak(utter);
+    }
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        chunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+        mediaRecorder.onstop = handleRecordingStop;
+        mediaRecorder.start();
+        micBtn.classList.add('recording');
+        micBtn.textContent = 'Listening...';
+        setStatus('Recording — release when done');
+      } catch (err) {
+        setStatus('Mic access denied or unavailable: ' + err.message);
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(t => t.stop());
+      }
+      micBtn.classList.remove('recording');
+      micBtn.textContent = 'Hold to Talk';
+    }
+
+    async function handleRecordingStop() {
+      const blob = new Blob(chunks, { type: 'audio/webm' });
+      if (blob.size < 1000) {
+        setStatus('Recording too short — try holding the button longer.');
+        return;
+      }
+      setStatus('Transcribing + diagnosing...');
+      const formData = new FormData();
+      formData.append('audio', blob, 'question.webm');
+
+      try {
+        const res = await fetch('/api/ask-voice', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Request failed');
+
+        showCard('question-card', data.question);
+        showCard('diagnosis-card', data.diagnosis.cause);
+        showCard('fix-card', data.diagnosis.suggestedFix);
+
+        const meta = document.getElementById('meta');
+        const retrievalNote = data.similarPastCount > 0 ? ` · found ${data.similarPastCount} similar past error(s)` : '';
+        const pastFixNote = data.diagnosis.referencedPastFix ? ' · model referenced a past fix' : '';
+        meta.textContent = data.diagnosis.relevantFile
+          ? `${data.diagnosis.relevantFile}${data.diagnosis.relevantLine ? ':' + data.diagnosis.relevantLine : ''} · confidence: ${data.diagnosis.confidence}${retrievalNote}${pastFixNote}`
+          : `confidence: ${data.diagnosis.confidence}${retrievalNote}${pastFixNote}`;
+        setStatus('');
+        speak(`${data.diagnosis.cause}. Suggested fix: ${data.diagnosis.suggestedFix}`);
+      } catch (err) {
+        setStatus('Error: ' + err.message);
+      }
+    }
+
+    // Hold-to-talk: mouse + touch support
+    micBtn.addEventListener('mousedown', startRecording);
+    micBtn.addEventListener('mouseup', stopRecording);
+    micBtn.addEventListener('mouseleave', () => { if (mediaRecorder?.state === 'recording') stopRecording(); });
+    micBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+    micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
+  </script>
+</body>
+
+</html>

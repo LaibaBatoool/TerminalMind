@@ -1,0 +1,43 @@
+{
+  "name": "termmind",
+  "version": "1.0.0",
+  "description": "Voice-narrated debugging copilot: watches your terminal, correlates errors with your git diff, and diagnoses what broke — by text, voice, or a searchable dashboard. Powered by Groq (free tier).",
+  "main": "dist/cli.js",
+  "bin": {
+    "termmind": "dist/cli.js"
+  },
+  "type": "commonjs",
+  "license": "MIT",
+  "keywords": [
+    "cli",
+    "debugging",
+    "developer-tools",
+    "llm",
+    "groq",
+    "voice",
+    "rag"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "record": "ts-node src/cli.ts record",
+    "ask": "ts-node src/cli.ts ask",
+    "history": "ts-node src/cli.ts history",
+    "serve": "ts-node src/cli.ts serve"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "multer": "^2.0.0",
+    "open": "^8.4.2",
+    "simple-git": "^3.27.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.10.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}
